@@ -50,18 +50,32 @@ const getOrderById = async (order_id) => {
 
 const updateOrder = async ({ order_id, updates }) => {
   try {
-    const { order_status, tracking_number, shipping_address } = updates;
-    const { rows } = await pool.query(
-      /*sql*/ `
+    const setClauses = [];
+    const values = [];
+    let idx = 1;
+
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        setClauses.push(`${key} = $${idx}`);
+        values.push(value);
+        idx++;
+      }
+    }
+
+    if (setClauses.length === 0) {
+      throw new Error("No valid fields to update");
+    }
+
+    values.push(order_id);
+
+    const SQL = `
       UPDATE orders
-      SET order_status = $1,
-          tracking_number = $2,
-          shipping_address = $3
-      WHERE id = $4
+      SET ${setClauses.join(", ")}
+      WHERE id = $${idx}
       RETURNING *;
-    `,
-      [order_status, tracking_number, shipping_address, order_id]
-    );
+    `;
+
+    const { rows } = await pool.query(SQL, values);
     return rows[0];
   } catch (error) {
     console.error("Error updating order:", error);

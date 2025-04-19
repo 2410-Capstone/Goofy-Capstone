@@ -21,7 +21,14 @@ const seedUsers = async () => {
       name: "Admin User",
       address: "0 Admin St",
       user_role: "admin",
-    }),    
+    }),
+    createUser({
+      email: "test@example.com",
+      password: "testpassword1",
+      name: "test user",
+      address: "1 test St",
+      user_role: "customer",
+    }),
     createUser({
       email: "luffy@example.com",
       password: "hashedpassword1",

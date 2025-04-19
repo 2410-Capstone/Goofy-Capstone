@@ -15,12 +15,9 @@ const router = express.Router();
 
 router.get("/orders", authenticateToken, async (req, res, next) => {
   try {
-    const orders = await getOrderByUserId(req.user.userId);
-    if (!orders) {
+    const orders = await getOrderByUserId(req.user.id);
+    if (!orders || orders.length === 0) {
       return res.status(404).json({ error: "My orders not found" });
-    }
-    if (orders.user_id !== req.user.userId) {
-      return res.status(403).json({ error: "Forbidden Access to my orders" });
     }
     res.json(orders);
   } catch (error) {
@@ -34,7 +31,7 @@ router.get("/:id", authenticateToken, async (req, res, next) => {
     if (!order) {
       return res.status(404).json({ error: "Order not found" });
     }
-    if (order.user_id !== req.user.userId) {
+    if (order.user_id !== req.user.id) {
       return res.status(403).json({ error: "Forbidden" });
     }
     res.json(order);
@@ -47,13 +44,14 @@ router.get("/:id/items", authenticateToken, async (req, res, next) => {
   const orderId = req.params.id;
 
   try {
-    const orderItems = await getOrderItems(orderId);
-    if (!orderItems) {
-      return res.status(404).json({ error: "Order items not found" });
+    const order = await getOrderById(orderId);
+    if (!order) {
+      return res.status(404).json({ error: "Order not found" });
     }
-    if (orderItems.user_id !== req.user.userId) {
+    if (order.user_id !== req.user.id && req.user.user_role !== "admin") {
       return res.status(403).json({ error: "Forbidden" });
     }
+    const orderItems = await getOrderItems(orderId);
     res.json(orderItems);
   } catch (error) {
     next(error);
@@ -73,7 +71,7 @@ router.patch("/:id", authenticateToken, async (req, res, next) => {
     if (!updatedOrder) {
       return res.status(404).json({ error: "Order not found failed to update" });
     }
-    if (updatedOrder.user_id !== req.user.userId && req.user.user_role !== "admin") {
+    if (updatedOrder.user_id !== req.user.id && req.user.user_role !== "admin") {
       return res.status(403).json({ error: "Forbidden from updating order" });
     }
     res.json(updatedOrder);
@@ -95,7 +93,8 @@ router.patch("/:orderId/items/:itemId", authenticateToken, async (req, res, next
     if (!updatedOrderItem) {
       return res.status(404).json({ error: "Order item not found can't change quantity" });
     }
-    if (updatedOrderItem.user_id !== req.user.userId && req.user.user_role !== "admin") {
+    const order = await getOrderById(updatedOrderItem.order_id);
+    if (order.user_id !== req.user.id && req.user.user_role !== "admin") {
       return res.status(403).json({ error: "Forbidden from updating order item" });
     }
     res.json(updatedOrderItem);
@@ -105,15 +104,32 @@ router.patch("/:orderId/items/:itemId", authenticateToken, async (req, res, next
   }
 });
 
-
 router.post("/orders", authenticateToken, async (req, res, next) => {
-  const { shipping_address, order_status, items } = req.body;
+  const { shipping_address, items } = req.body;
+  const order_status = req.body.order_status || "created";
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: "Order must include at least one item" });
+  }
+  for (const item of items) {
+    if (!item.product_id || !item.quantity) {
+      return res.status(400).json({ error: "Each item must have a product_id and quantity" });
+    }
+  }
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
     const newOrder = await createOrder({
-      user_id: req.user.userId,
+      user_id: req.user.id,
+      shipping_address,
+      order_status: order_status,
+      tracking_number: null,
+      total: 0,
+    });
+    console.log("Creating order with:", {
+      user_id: req.user.id,
       shipping_address,
       order_status,
       tracking_number: null,
@@ -147,7 +163,7 @@ router.post("/orders", authenticateToken, async (req, res, next) => {
 });
 
 router.post("/:orderId/items", authenticateToken, async (req, res, next) => {
-  const { product_id, quantity, price } = req.body;
+  const { product_id, quantity } = req.body;
   const orderId = req.params.orderId;
 
   try {
@@ -173,7 +189,7 @@ router.delete("/:id", authenticateToken, async (req, res, next) => {
     if (!deletedOrder) {
       return res.status(404).json({ error: "Order not found" });
     }
-    if (deletedOrder.user_id !== req.user.userId) {
+    if (deletedOrder.user_id !== req.user.id) {
       return res.status(403).json({ error: "Forbidden from deleting order" });
     }
     res.json({ message: "Order deleted successfully" });
@@ -189,7 +205,7 @@ router.delete("/:orderId/items/:itemId", authenticateToken, async (req, res, nex
     if (!deletedOrderItem) {
       return res.status(404).json({ error: "Order item not found" });
     }
-    if (deletedOrderItem.user_id !== req.user.userId) {
+    if (deletedOrderItem.user_id !== req.user.id) {
       return res.status(403).json({ error: "Forbidden from deleting order item" });
     }
     res.json({ message: "Order item deleted successfully" });
@@ -198,13 +214,9 @@ router.delete("/:orderId/items/:itemId", authenticateToken, async (req, res, nex
   }
 });
 
-
 //mybe an admin route this one may be redundant
 // router.post("/orders", authenticateToken, async (req, res, next) => {
 //   const client = await pool.connect();
-
-router.post("/", authenticateToken, async (req, res, next) => {
-  const client = await pool.connect();
 
 //   try {
 //     await client.query("BEGIN");
@@ -216,7 +228,7 @@ router.post("/", authenticateToken, async (req, res, next) => {
 //        FROM cart_items c
 //        JOIN products p ON c.product_id = p.id
 //        WHERE c.user_id = $1`,
-//       [req.user.userId]
+//       [req.user.id]
 //     );
 
 //     if (cartItems.rows.length === 0) {
@@ -235,7 +247,7 @@ router.post("/", authenticateToken, async (req, res, next) => {
 //     // 3. Create order
 //     const orderResult = await client.query(
 //       "INSERT INTO orders (user_id, total, order_status) VALUES ($1, $2, $3) RETURNING id",
-//       [req.user.userId, total, "pending"]
+//       [req.user.id, total, "pending"]
 //     );
 //     const orderId = orderResult.rows[0].id;
 
@@ -252,7 +264,7 @@ router.post("/", authenticateToken, async (req, res, next) => {
 //     }
 
 //     // 5. Clear cart
-//     await client.query("DELETE FROM cart_items WHERE user_id = $1", [req.user.userId]);
+//     await client.query("DELETE FROM cart_items WHERE user_id = $1", [req.user.id]);
 
 //     await client.query("COMMIT");
 
